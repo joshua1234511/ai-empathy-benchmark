@@ -306,10 +306,9 @@ This section presents the comparative performance of the selected AI models acro
 
 | Metric | F-Statistic | p-Value | Significant Difference (p < 0.05)? |
 |--------|-------------|---------|-----------------------------------|
-| Decision Accuracy | 560.00 | 0.010 | Yes |
-| Empathy Alignment Score | 6.69 | 0.010 | Yes |
-| Explanation Quality | 0.21 | 0.150 | No |
-
+| Decision Accuracy | 0.55 | 0.703 | No |
+| Empathy Alignment Score | 121.99 | <0.001 | Yes |
+| Explanation Quality | 26.92 | <0.001 | Yes |
 ### B. Qualitative Results
 
 **Table 3 — Sample Scenario Analysis**

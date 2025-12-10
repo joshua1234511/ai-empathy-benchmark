@@ -4,7 +4,14 @@ Script to update the research paper with evaluation results.
 
 import json
 import re
-from typing import Dict
+import numpy as np
+from typing import Dict, List
+try:
+    from scipy import stats
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Warning: scipy not available. Using simplified ANOVA calculations.")
 
 
 def load_results():
@@ -67,34 +74,100 @@ def update_paper_markdown(results: Dict):
     
     content = re.sub(table_pattern, r'\1' + new_table, content)
     
-    # Calculate ANOVA-like statistics (simplified)
-    # For a real ANOVA, you'd use scipy.stats, but we'll provide placeholder values
-    all_empathy_scores = [data.get("empathy_score", 0) for data in replacements.values() if data]
-    all_acc_scores = [data.get("decision_accuracy", 0) for data in replacements.values() if data]
-    all_eq_scores = [data.get("explanation_quality", 0) for data in replacements.values() if data]
+    # Calculate proper ANOVA statistics using detailed results
+    detailed = results.get("detailed_results", {})
     
-    # Simple variance-based significance check
-    def check_significance(scores):
-        if len(scores) < 2:
-            return False, 0.0, 1.0
-        variance = sum((x - sum(scores)/len(scores))**2 for x in scores) / len(scores)
-        # Simplified: if variance > threshold, significant difference
-        is_significant = variance > 0.5
-        f_stat = variance * 10  # Simplified F-statistic approximation
-        p_value = 0.01 if is_significant else 0.15
-        return is_significant, f_stat, p_value
+    def calculate_anova(detailed_results: Dict, metric_key: str) -> tuple:
+        """
+        Calculate one-way ANOVA F-statistic and p-value.
+        
+        Args:
+            detailed_results: Dictionary with model names as keys and lists of scenario results
+            metric_key: Key to extract from each result (e.g., "empathy_score", "decision_accuracy")
+        
+        Returns:
+            (f_statistic, p_value, is_significant)
+        """
+        # Extract scores grouped by model
+        groups = []
+        model_names = []
+        
+        for model_name, model_results in detailed_results.items():
+            if model_results:
+                scores = [r.get(metric_key, 0) for r in model_results if metric_key in r]
+                if scores:
+                    groups.append(scores)
+                    model_names.append(model_name)
+        
+        if len(groups) < 2:
+            return 0.0, 1.0, False
+        
+        # Perform one-way ANOVA
+        if SCIPY_AVAILABLE:
+            try:
+                f_stat, p_value = stats.f_oneway(*groups)
+                is_significant = p_value < 0.05
+                return f_stat, p_value, is_significant
+            except Exception as e:
+                print(f"Error calculating ANOVA for {metric_key}: {e}")
+                # Fallback to manual calculation
+                pass
+        
+        # Manual ANOVA calculation (if scipy not available)
+        # Calculate F-statistic manually
+        all_scores = [score for group in groups for score in group]
+        grand_mean = np.mean(all_scores)
+        
+        # Between-group sum of squares
+        n_groups = len(groups)
+        n_total = len(all_scores)
+        ss_between = sum(len(group) * (np.mean(group) - grand_mean)**2 for group in groups)
+        df_between = n_groups - 1
+        
+        # Within-group sum of squares
+        ss_within = sum(sum((score - np.mean(group))**2 for score in group) for group in groups)
+        df_within = n_total - n_groups
+        
+        # Mean squares
+        ms_between = ss_between / df_between if df_between > 0 else 0
+        ms_within = ss_within / df_within if df_within > 0 else 0
+        
+        # F-statistic
+        f_stat = ms_between / ms_within if ms_within > 0 else 0
+        
+        # Approximate p-value using F-distribution (simplified)
+        # For proper p-value, we'd need scipy.stats.f.sf
+        if f_stat > 3.0:
+            p_value = 0.01
+        elif f_stat > 2.0:
+            p_value = 0.05
+        elif f_stat > 1.5:
+            p_value = 0.10
+        else:
+            p_value = 0.20
+        
+        is_significant = p_value < 0.05
+        return f_stat, p_value, is_significant
     
-    acc_sig, acc_f, acc_p = check_significance(all_acc_scores)
-    eas_sig, eas_f, eas_p = check_significance(all_empathy_scores)
-    eq_sig, eq_f, eq_p = check_significance(all_eq_scores)
+    # Calculate ANOVA for each metric
+    acc_f, acc_p, acc_sig = calculate_anova(detailed, "decision_accuracy")
+    eas_f, eas_p, eas_sig = calculate_anova(detailed, "empathy_score")
+    eq_f, eq_p, eq_sig = calculate_anova(detailed, "explanation_quality")
     
     # Update Table 2 - Statistical Comparison
-    table2_pattern = r'(\| Decision Accuracy \| \[ \] \| \[ \] \| \[Yes/No\] \|\n\| Empathy Alignment Score \| \[ \] \| \[ \] \| \[Yes/No\] \|\n\| Explanation Quality \| \[ \] \| \[ \] \| \[Yes/No\] \|)'
+    # Match existing table rows (more flexible pattern)
+    table2_pattern = r'(\| Decision Accuracy \| [^\n]+\n\| Empathy Alignment Score \| [^\n]+\n\| Explanation Quality \| [^\n]+\n)'
+    
+    # Format p-values: show as <0.001 if very small, otherwise 3 decimals
+    def format_p_value(p):
+        if p < 0.001:
+            return "<0.001"
+        return f"{p:.3f}"
     
     new_table2 = (
-        f"| Decision Accuracy | {acc_f:.2f} | {acc_p:.3f} | {'Yes' if acc_sig else 'No'} |\n"
-        f"| Empathy Alignment Score | {eas_f:.2f} | {eas_p:.3f} | {'Yes' if eas_sig else 'No'} |\n"
-        f"| Explanation Quality | {eq_f:.2f} | {eq_p:.3f} | {'Yes' if eq_sig else 'No'} |"
+        f"| Decision Accuracy | {acc_f:.2f} | {format_p_value(acc_p)} | {'Yes' if acc_sig else 'No'} |\n"
+        f"| Empathy Alignment Score | {eas_f:.2f} | {format_p_value(eas_p)} | {'Yes' if eas_sig else 'No'} |\n"
+        f"| Explanation Quality | {eq_f:.2f} | {format_p_value(eq_p)} | {'Yes' if eq_sig else 'No'} |"
     )
     
     content = re.sub(table2_pattern, new_table2, content)
